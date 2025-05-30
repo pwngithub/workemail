@@ -1,82 +1,74 @@
-
 import streamlit as st
-import fitz  # PyMuPDF
-import re
 from collections import defaultdict
 
-def extract_text_from_pdf(uploaded_file):
-    text = ""
-    with fitz.open(stream=uploaded_file.read(), filetype="pdf") as doc:
-        for page in doc:
-            text += page.get_text()
-    return text
+st.set_page_config(page_title="Technician Summary", layout="centered")
+st.title("Technician Work Summary")
 
-def parse_work_orders(raw_text):
-    tech_tasks = defaultdict(list)
+st.markdown("Upload a PDF of the daily work schedule. The app will summarize technician tasks for email distribution.")
 
-    # Split into chunks by technician sections using the pattern of tech name lines like "0XX TechNameTechnician:"
-    tech_sections = re.findall(r"0\w+\s+([\w\s\-]+)Technician:(.*?)Type of Work", raw_text, re.DOTALL)
+uploaded_file = st.file_uploader("Upload Work Schedule PDF", type=["pdf"])
 
-    for tech_name, section in tech_sections:
-        tech_name = tech_name.strip()
-        lines = section.strip().split("\n")
-        for line in lines:
-            if "convert" in line.lower():
-                time_label = ""
-                if "first thing" in line.lower():
-                    time_label = "First thing convert"
-                elif "am" in line.lower():
-                    time_label = "AM convert"
-                elif "pm" in line.lower():
-                    time_label = "PM convert"
-                else:
-                    time_label = "Convert"
-                match = re.search(r",\s*(\w)", line)
-                if match:
-                    customer = match.group(1)
-                    tech_tasks[tech_name].append(f"{time_label} – {customer}")
-            elif "prep" in line.lower():
-                tech_tasks[tech_name].append("Prep – Aroostook Agency on Aging")
-            elif "tree" in line.lower():
-                match = re.search(r",\s*(\w)", line)
-                if match:
-                    tech_tasks[tech_name].append(f"Tree on drop – {match.group(1)}")
-            elif "survey" in line.lower() and "door hanger" in line.lower():
-                tech_tasks[tech_name].append("Surveys/Door hangers – Princeton")
-            elif "phone" in line.lower() or "static" in line.lower():
-                match = re.search(r",\s*(\w)", line)
-                if match:
-                    tech_tasks[tech_name].append(f"Phone fix – {match.group(1)}")
-            elif "low line" in line.lower():
-                match = re.search(r",\s*(\w)", line)
-                if match:
-                    tech_tasks[tech_name].append(f"Low line – {match.group(1)}")
-            elif "low drop" in line.lower() or "highland" in line.lower():
-                tech_tasks[tech_name].append("Low drop – Highland Ave")
-            elif "rot" in line.lower():
-                match = re.search(r",\s*(\w)", line)
-                if match:
-                    tech_tasks[tech_name].append(f"ROT – {match.group(1)}")
-
-    return tech_tasks
-
-def generate_summary(text):
-    parsed = parse_work_orders(text)
-    result = ""
-    for tech, tasks in parsed.items():
-        result += f"**{tech}**\n"
-        for task in tasks:
-            result += f"- {task}\n"
-        result += "\n"
-    return result.strip()
-
-# Streamlit UI
-st.title("Work Order Summary Email Generator")
-uploaded_file = st.file_uploader("Upload PDF Work Order", type=["pdf"])
+# Predefined technician code mapping
+tech_code_map = {
+    "0CC": "Cam Callnan",
+    "0CN": "Nash Hayward",
+    "0GG": "Gage G",
+    "0JL": "Jason Laws",
+    "0JJ": "Jake J",
+    "0NL": "Noah Jackins",
+    "0PC": "Preston C",
+}
 
 if uploaded_file:
-    text = extract_text_from_pdf(uploaded_file)
-    summary = generate_summary(text)
-    st.markdown("### Auto-Generated Summary Email")
-    st.markdown(summary)
-    st.download_button("Download Summary as Text", summary, file_name="summary.txt")
+    import fitz  # PyMuPDF
+    import re
+
+    # Read PDF text
+    with fitz.open(stream=uploaded_file.read(), filetype="pdf") as doc:
+        raw_text = " ".join(page.get_text() for page in doc)
+
+    # Extract technician work entries
+    entries = re.split(r"(?=0[A-Z]{2}\s+\d{3}\s+[A-Z][a-z]+,\s+[A-Z])", raw_text)
+
+    task_summary = defaultdict(list)
+
+    for entry in entries:
+        match = re.match(r"(0[A-Z]{2})\s+\d{3}\s+[A-Z]{3}\s+([A-Z][a-z]+),\s+([A-Z])", entry)
+        if not match:
+            continue
+
+        tech_code = match.group(1)
+        last_name = match.group(2)
+        initial = match.group(3)
+        tech_name = tech_code_map.get(tech_code, f"{last_name} {initial}")
+
+        # Extract customer initial
+        customer_match = re.search(r"([A-Z][a-z]+),\s*([A-Z])", entry)
+        customer_initial = f"{customer_match.group(2)}." if customer_match else ""
+
+        entry_lower = entry.lower()
+        if "convert" in entry_lower:
+            task = f"Convert – {customer_initial}"
+        elif "install" in entry_lower:
+            task = f"FTTH install – {customer_initial}"
+        elif "survey" in entry_lower:
+            task = f"Survey – {customer_initial}"
+        elif "rot" in entry_lower:
+            task = f"ROT – {customer_initial}"
+        elif any(word in entry_lower for word in ["offline", "modem", "signal", "internal service"]):
+            task = f"Phone fix – {customer_initial}"
+        elif "tree" in entry_lower:
+            task = f"Tree on drop – {customer_initial}"
+        elif "door hanger" in entry_lower or "princeton" in entry_lower:
+            task = "Surveys/door hangers in Princeton"
+        else:
+            continue
+
+        task_summary[tech_name].append(task)
+
+    st.subheader("Summary Email Preview")
+    for tech, tasks in task_summary.items():
+        st.markdown(f"**{tech}**")
+        for task in tasks:
+            st.markdown(f"- {task}")
+        st.markdown("\n")
